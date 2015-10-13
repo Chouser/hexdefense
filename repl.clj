@@ -13,7 +13,7 @@
 
 
 (let [build cljs.closure/build
-      repl-env (cljs.repl.browser/repl-env)]
+      repl-env (cljs.repl.browser/repl-env :port 9000)]
   (with-redefs [cljs.closure/build (fn [source opts compiler-env]
                                      (binding [cljs.analyzer/*cljs-ns* 'cljs.user]
                                        (let [rtn (build source opts compiler-env)]
