@@ -57,6 +57,7 @@
 (def blue (array 80 80 255))
 (def white (array 255 255 255))
 (def black (array 0 0 0))
+(def purple (array 200 0 200))
 
 (defn gradient [colors i]
   (if-not i
@@ -73,6 +74,9 @@
 (defn icolor [i]
   (gradient (array white green blue red
                    white green blue red) i))
+
+(defn baddie-color [i]
+  (gradient (array white purple) i))
 
 (defn fillhex [ctx trig x y c]
   (let [[cx cy] (cell-center trig x y)]
@@ -92,7 +96,7 @@
   (.fillRect ctx 0 0 1000 500)
   (doseq [[x col] (map-indexed list tower-board)
           [y cell] (map-indexed list col)]
-    (fillhex ctx trig x y (if cell "#333" "#eee"))))
+    (fillhex ctx trig x y (if cell "#333" "#cec"))))
 
 (defn draw-hex-cursor [ctx trig xy]
   (let [[mx my] (mouse-cell trig xy)]
@@ -145,39 +149,21 @@
 
           (.restore ctx))))))
 
-(defn draw-baddie [ctx trig baddie]
+(defn draw-baddie [ctx trig frame baddie]
   (.beginPath ctx)
   (let [[x y] (:xy baddie)]
-    (.arc ctx x y (* 0.4 (:radius trig)) 0 (* Math/PI 2) true))
+    (.save ctx)
+    (.translate ctx x y)
+    (.rotate ctx (/ x 25))
+    (hexpath ctx (update trig :radius * 0.7) 0 0)
+    (.restore ctx)
+    #_(.arc ctx x y (* 0.4 (:radius trig)) 0 (* Math/PI 2) true))
   (.closePath ctx)
-  (set! (.-fillStyle ctx) "#f44")
   (.fill ctx)
-  (set! (.-strokeStyle ctx) "2px #000 solid")
   (.stroke ctx))
 
 (defn empty-board [x-limit y-limit]
-  (-> (vec (repeat x-limit (vec (repeat y-limit nil))))
-      (assoc-in [7 10] :x)
-      (assoc-in [7 12] :x)
-      (assoc-in [7 14] :x)
-      (assoc-in [7 16] :x)
-      (assoc-in [7 18] :x)
-      (assoc-in [7 20] :x)
-      (assoc-in [7 22] :x)
-      (assoc-in [7 24] :x)
-
-      ;;(assoc-in [7 13] :x)
-
-      (assoc-in [8 0] :x)
-      (assoc-in [8 2] :x)
-      (assoc-in [8 4] :x)
-      (assoc-in [8 6] :x)
-      (assoc-in [8 8] :x)
-      (assoc-in [8 10] :x)
-      (assoc-in [8 12] :x)
-      (assoc-in [8 14] :x)
-      (assoc-in [8 16] :x)
-      ))
+  (vec (repeatedly x-limit #(vec (repeatedly y-limit (fn [] (when (zero? (rand-int 5)) :x)))))))
 
 (defn to-distance-board [tower-board]
   (let [x-limit (count tower-board)
@@ -211,7 +197,8 @@
 (defonce conn (repl/connect "http://localhost:9000/repl"))
 
 (defn draw [app]
-  (let [{:keys [ctx trig distance-board direction-board tower-board mouse baddies]}
+  (let [{:keys [ctx trig distance-board direction-board tower-board
+                mouse baddies frame target-board]}
         (swap! app assoc :draw false)]
     ;;(time (busy ctx))
     (set! (.-fillStyle ctx) "#fff")
@@ -220,8 +207,26 @@
     (draw-towers ctx trig tower-board)
     ;;(draw-distance-gradient ctx trig distance-board tower-board)
     ;;(walking-paths ctx trig direction-board tower-board)
-    (doseq [baddie baddies]
-      (draw-baddie ctx trig baddie))
+    (set! (.-fillStyle ctx) "#a5a")
+    (set! (.-strokeStyle ctx) "#fff")
+    (set! (.-lineWidth ctx) "2")
+    (doseq [[id baddie] baddies]
+      (set! (.-fillStyle ctx) (baddie-color (/ (:hp baddie) 10000)))
+      (draw-baddie ctx trig frame baddie))
+
+    (set! (.-strokeStyle ctx) "#f00")
+    (set! (.-lineWidth ctx) "5")
+    (doseq [[x col] (map-indexed list target-board)
+            [y id] (map-indexed list col)
+            :when id]
+      (.beginPath ctx)
+      (let [[fx fy] (cell-center trig x y)
+            [tx ty] (:xy (baddies id))]
+        (.moveTo ctx fx fy)
+        (.lineTo ctx tx ty))
+      (.closePath ctx)
+      (.stroke ctx))
+
     (draw-hex-cursor ctx trig mouse)))
 
 (defn schedule-draw [app]
@@ -239,10 +244,13 @@
 (defn add-baddie [app]
   (schedule-animate app)
   (schedule-draw app)
-  (let [x (rand-int 15)
+  (let [x 14
         y (rand-int 26)
-        baddie {:from-cell [x y], :xy (cell-center (:trig @app) x y)}]
-    (swap! app update :baddies conj baddie))
+        id (rand-int 100000)
+        baddie {:from-cell [x y],
+                :xy (cell-center (:trig @app) x y),
+                :hp 10000}]
+    (swap! app update :baddies assoc id baddie))
   (.setTimeout js/window (fn [] (add-baddie app)) 500))
 
 (defn distance**2 [x1 y1 x2 y2]
@@ -257,12 +265,18 @@
       (schedule-draw app))
 
     ;; warning -- time shear
+    (swap! app update :frame inc)
     (swap! app update :baddies
            (fn [baddies]
-             (doall
-              (for [{:as baddie [x y] :xy, :keys [to-cell from-cell]} baddies
-                    :when (and (< 0 x 1000) (< 0 y 500) (not= from-cell [0 0]))]
-                (let [to-cell (or to-cell (rand-nth (get-in direction-board from-cell)))
+             (into {}
+              (for [[id {:as baddie [x y] :xy, :keys [hp to-cell from-cell]}] baddies
+                    :when (and (< 0 x 1000)
+                               (< 0 y 500)
+                               (not= from-cell [0 0])
+                               (< 0 hp))]
+                (let [to-cell (or to-cell (rand-nth (get-in direction-board from-cell))
+                                  (prn :problem-with id baddie (get-in direction-board from-cell))
+                                  [0 0])
                       [cx cy] to-cell
                       [tx ty] (cell-center trig cx cy)
                       d (Math/sqrt (distance**2 x y tx ty))
@@ -273,10 +287,39 @@
                       [from-cell to-cell] (if (> d (* 2 speed))
                                             [from-cell to-cell]
                                             [to-cell nil])]
-                  (assoc baddie
-                    :xy (array nx ny)
-                    :from-cell from-cell
-                    :to-cell to-cell))))))))
+                  [id
+                   (assoc baddie
+                     :xy (array nx ny)
+                     :from-cell from-cell
+                     :to-cell to-cell)])))))
+    (let [{:keys [baddies distance-board]} @app
+          range**2 (* 4 (:radius trig) 4 (:radius trig))]
+      (swap! app
+             (fn [app]
+               (let [tb (:target-board app)
+                     badatom (atom (:baddies app))]
+                 (assoc app
+                   :target-board
+                   (doall
+                    (for [[x col] (map-indexed list (:tower-board app))]
+                      (doall
+                       (for [[y cell] (map-indexed list col)]
+                         (when cell
+                           (let [old-target-id (get-in tb [x y])
+                                 [fx fy] (cell-center trig x y)
+                                 ;;old-dist**2 (distance**2 fx fy ..)
+                                 old-target (baddies old-target-id)
+                                 target-id (or (when (and old-target
+                                                          (< (apply distance**2 fx fy (:xy old-target)) range**2))
+                                                 old-target-id)
+                                               (first
+                                                (for [[id {:as baddie [bx by] :xy}] baddies
+                                                      :when (< (distance**2 fx fy bx by) range**2)]
+                                                  id)))]
+                             (when target-id
+                               (swap! badatom update-in [target-id :hp] - 40))
+                             target-id))))))
+                   :baddies @badatom)))))))
 
 (defn re*load []
   (when-let [canvas (dom/getElement "canvas")]
@@ -291,8 +334,10 @@
               :tower-board tower-board
               :distance-board distance-board
               :direction-board (to-direction-board distance-board)
-              :baddies []
+              :target-board nil
+              :baddies {}
               :draw nil
+              :frame 0
               :animate nil})]
     (events/listen
      canvas "mousemove"
